@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Christmas Tree</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000000; font-family: 'Times New Roman', serif; }
@@ -98,11 +98,11 @@
             border-radius: 8px;
             overflow: hidden;
             opacity: 1;
-            pointer-events: auto; /* 允许点击 */
+            pointer-events: auto;
             box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
             background: radial-gradient(circle at top, rgba(255,255,255,0.08), rgba(0,0,0,0.9));
             backdrop-filter: blur(4px);
-            z-index: 20; /* 压过 Three.js canvas 和 UI */
+            z-index: 20;
         }
 
         #webcam {
@@ -110,10 +110,9 @@
             height: 100%;
             display: block;
             object-fit: cover;
-            transform: scaleX(-1); /* 像自拍一样镜像 */
+            transform: scaleX(-1);
         }
 
-        /* 小窗口上的提示文字层 */
         #webcam-hint {
             position: absolute;
             left: 0; top: 0;
@@ -129,30 +128,19 @@
             color: rgba(255,255,255,0.85);
             background: rgba(0,0,0,0.6);
             box-sizing: border-box;
-            pointer-events: none; /* 不挡点击事件 */
+            pointer-events: none;
             transition: opacity 0.4s ease;
         }
         #webcam-hint.hidden {
             opacity: 0;
         }
     </style>
-    
+
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&display=swap');
     </style>
-
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
-                "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm"
-            }
-        }
-    </script>
 </head>
 <body>
-
     <div id="loader">
         <div class="spinner"></div>
         <div class="loader-text">Loading Holiday Magic</div>
@@ -172,21 +160,20 @@
         </div>
     </div>
 
-    <!-- 摄像头预览小窗口（点击这里开启 / 重新尝试） -->
     <div id="webcam-wrapper">
         <video id="webcam" autoplay playsinline muted></video>
         <div id="webcam-hint">Tap to enable camera</div>
     </div>
 
     <script type="module">
-        import * as THREE from 'three';
-        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-        import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'; 
+        /* 直接用 URL 导入，避免 importmap 在 iOS 上翻车 */
+        import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+        import { EffectComposer } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js';
+        import { RoomEnvironment } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/environments/RoomEnvironment.js';
 
-        // Mediapipe 通过动态 import 加载，避免加载失败时整个脚本崩掉
-        let HandLandmarker, FilesetResolver;
+        let HandLandmarker, FilesetResolver; // Mediapipe 之后动态 import
 
         const CONFIG = {
             colors: {
@@ -205,7 +192,7 @@
         };
 
         const STATE = {
-            mode: 'TREE',   // TREE / SCATTER / FOCUS
+            mode: 'TREE',
             focusIndex: -1,
             focusTarget: null,
             hand: { detected: false, x: 0, y: 0 },
@@ -220,17 +207,14 @@
         let handLandmarker, video;
         let caneTexture;
 
-        // 手势平滑
         let smoothedPinch = 0.07;
         let smoothedSpread = 0.32;
 
-        // 模式切换防抖
         let gestureFocusFrames = 0;
         let gestureScatterFrames = 0;
         let gestureTreeFrames = 0;
         const GESTURE_HOLD_FRAMES = 6;
 
-        // FOCUS 模式相关
         const INACTIVITY_EXIT_SECONDS = 10;
         const INACTIVITY_EXIT_MS = INACTIVITY_EXIT_SECONDS * 1000;
         const HAND_MOVE_THRESHOLD = 0.04;
@@ -238,11 +222,7 @@
         let lastHandX = 0;
         let lastHandY = 0;
         let lastHandMoveTime = 0;
-
-        // FOCUS 中“捏一下”点击状态
         let pinchIsDown = false;
-
-        // 摄像头循环只启动一次
         let webcamLoopStarted = false;
 
         async function init() {
@@ -257,8 +237,8 @@
             setupEvents();
 
             video = document.getElementById('webcam');
-            // 这里不自动申请摄像头，避免 iPhone 静默拒绝
-            // 用户点击右下角小窗口后再真正调用 getUserMedia
+
+            // 不自动申请摄像头，避免 iOS 静默拒绝，点击右下角再申请
 
             const loader = document.getElementById('loader');
             loader.style.opacity = 0;
@@ -610,10 +590,9 @@
                 await video.play();
                 hideWebcamHint();
 
-                // 启动手势模块（如果可用）
                 try {
                     if (!HandLandmarker || !FilesetResolver) {
-                        const visionModule = await import('@mediapipe/tasks-vision');
+                        const visionModule = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm');
                         FilesetResolver = visionModule.FilesetResolver;
                         HandLandmarker = visionModule.HandLandmarker;
 
@@ -726,9 +705,9 @@
             smoothedPinch = THREE.MathUtils.lerp(smoothedPinch, rawPinch, 0.5);
             smoothedSpread = THREE.MathUtils.lerp(smoothedSpread, rawSpread, 0.5);
 
-            const PINCH_FOCUS   = 0.055; // 进入 FOCUS
-            const SPREAD_OPEN   = 0.42;  // 张开 → SCATTER
-            const SPREAD_CLOSED = 0.30;  // 握拳 → TREE
+            const PINCH_FOCUS   = 0.055;
+            const SPREAD_OPEN   = 0.42;
+            const SPREAD_CLOSED = 0.30;
 
             let gestureType = null;
             if (smoothedPinch < PINCH_FOCUS) {
@@ -741,13 +720,11 @@
                 gestureType = null;
             }
 
-            // 模式切换
             if (gestureType === 'FOCUS') {
                 gestureFocusFrames++;
                 gestureScatterFrames = 0;
                 gestureTreeFrames = 0;
 
-                // 只能从 SCATTER 进入 FOCUS
                 if (gestureFocusFrames >= GESTURE_HOLD_FRAMES && STATE.mode === 'SCATTER') {
                     STATE.mode = 'FOCUS';
                     const photos = particleSystem.filter(p => p.type === 'PHOTO');
@@ -788,7 +765,6 @@
                 gestureFocusFrames = gestureScatterFrames = gestureTreeFrames = 0;
             }
 
-            // FOCUS 模式：捏一下切图 + 静止退出
             if (STATE.mode === 'FOCUS') {
                 const photos = particleSystem.filter(p => p.type === 'PHOTO');
                 if (photos.length > 0) {
@@ -834,7 +810,6 @@
 
             const webcamWrapper = document.getElementById('webcam-wrapper');
             webcamWrapper.addEventListener('click', () => {
-                // 这里一定是用户点击 → iPhone 会把它当成 user gesture
                 startCameraAndGestures(true);
             });
             
