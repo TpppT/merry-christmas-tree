@@ -185,6 +185,7 @@
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
         import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'; 
 
+        // Mediapipe 通过动态 import 加载，避免加载失败时整个脚本崩掉
         let HandLandmarker, FilesetResolver;
 
         const CONFIG = {
@@ -256,9 +257,8 @@
             setupEvents();
 
             video = document.getElementById('webcam');
-
-            // 桌面端可以自动尝试；手机上如果不弹权限，用户再点小窗口重试
-            startCameraAndGestures(false);
+            // 这里不自动申请摄像头，避免 iPhone 静默拒绝
+            // 用户点击右下角小窗口后再真正调用 getUserMedia
 
             const loader = document.getElementById('loader');
             loader.style.opacity = 0;
@@ -600,7 +600,7 @@
             }
 
             try {
-                setWebcamHint(fromUserGesture ? 'Requesting camera...' : 'Trying camera...');
+                setWebcamHint(fromUserGesture ? 'Requesting camera...' : 'Tap to enable camera');
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: 'user' },
                     audio: false
@@ -631,7 +631,6 @@
                     }
                 } catch (err) {
                     console.warn('Gesture module failed, camera preview still works:', err);
-                    // 不强制提示，手势失败就当没手势
                 }
 
                 if (!webcamLoopStarted) {
@@ -833,9 +832,9 @@
 
             document.getElementById('file-input').addEventListener('change', handleImageUpload);
 
-            // 点击小窗口 → 以用户手势重新请求摄像头（手机上非常重要）
             const webcamWrapper = document.getElementById('webcam-wrapper');
             webcamWrapper.addEventListener('click', () => {
+                // 这里一定是用户点击 → iPhone 会把它当成 user gesture
                 startCameraAndGestures(true);
             });
             
