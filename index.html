@@ -111,11 +111,38 @@
             display: block;
             object-fit: cover;
         }
+
+        /* 移动端适配 */
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 32px;
+                letter-spacing: 3px;
+            }
+
+            .upload-wrapper {
+                margin-top: 12px;
+            }
+
+            #webcam-wrapper {
+                width: 110px;
+                height: 82px;
+                bottom: 16px;
+                right: 16px;
+            }
+
+            .loader-text {
+                font-size: 12px;
+                letter-spacing: 3px;
+            }
+        }
     </style>
     
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&display=swap');
     </style>
+
+    <!-- 让 importmap 在手机上也可用的 polyfill -->
+    <script async src="https://ga.jspm.io/npm:es-module-shims@1.8.2/dist/es-module-shims.js"></script>
 
     <script type="importmap">
         {
@@ -149,7 +176,7 @@
     </div>
 
     <div id="webcam-wrapper">
-        <video id="webcam" autoplay playsinline style="display:none;"></video>
+        <video id="webcam" autoplay playsinline muted style="display:none;"></video>
         <canvas id="webcam-preview"></canvas>
     </div>
 
@@ -161,12 +188,15 @@
         import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'; 
         import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 
+        // 简单判断是否为移动端
+        const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+
         const CONFIG = {
             colors: {
                 bg: 0x000000, 
                 champagneGold: 0xffd966, 
                 deepGreen: 0x03180a,     
-                accentRed: 0x990000,     
+                accentRed: 0x990000     
             },
             particles: {
                 count: 1500,
@@ -176,6 +206,13 @@
             },
             camera: { z: 50 }
         };
+
+        // 移动端降低粒子数量、稍微拉远相机
+        if (isMobile) {
+            CONFIG.particles.count = 800;
+            CONFIG.particles.dustCount = 1200;
+            CONFIG.camera.z = 55;
+        }
 
         const STATE = {
             mode: 'TREE',   // TREE / SCATTER / FOCUS
@@ -245,7 +282,10 @@
 
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+            const maxPixelRatio = isMobile ? 1.5 : 2;
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPixelRatio));
+
             renderer.toneMapping = THREE.ReinhardToneMapping;
             renderer.toneMappingExposure = 2.2;
             container.appendChild(renderer.domElement);
@@ -417,7 +457,8 @@
 
             const goldMat = new THREE.MeshStandardMaterial({
                 color: CONFIG.colors.champagneGold,
-                metalness: 1.0, roughness: 0.1,
+                metalness: 1.0,
+                roughness: 0.1,
                 envMapIntensity: 2.0,
                 emissive: 0x443300,
                 emissiveIntensity: 0.3
@@ -425,14 +466,17 @@
 
             const greenMat = new THREE.MeshStandardMaterial({
                 color: CONFIG.colors.deepGreen,
-                metalness: 0.2, roughness: 0.8,
+                metalness: 0.2,
+                roughness: 0.8,
                 emissive: 0x002200,
                 emissiveIntensity: 0.2
             });
 
             const redMat = new THREE.MeshPhysicalMaterial({
                 color: CONFIG.colors.accentRed,
-                metalness: 0.3, roughness: 0.2, clearcoat: 1.0,
+                metalness: 0.3,
+                roughness: 0.2,
+                clearcoat: 1.0,
                 emissive: 0x330000
             });
             
@@ -469,8 +513,11 @@
 
             const starGeo = new THREE.OctahedronGeometry(1.2, 0);
             const starMat = new THREE.MeshStandardMaterial({
-                color: 0xffdd88, emissive: 0xffaa00, emissiveIntensity: 1.0,
-                metalness: 1.0, roughness: 0
+                color: 0xffdd88,
+                emissive: 0xffaa00,
+                emissiveIntensity: 1.0,
+                metalness: 1.0,
+                roughness: 0
             });
             const star = new THREE.Mesh(starGeo, starMat);
             star.position.set(0, CONFIG.particles.treeHeight/2 + 1.2, 0);
@@ -570,9 +617,15 @@
                 console.error('Failed to init MediaPipe', e);
             }
             
-            if (navigator.mediaDevices?.getUserMedia) {
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            facingMode: 'user',           // 手机优先使用前置摄像头
+                            width:  { ideal: 640 },
+                            height: { ideal: 480 }
+                        }
+                    });
                     video.srcObject = stream;
 
                     video.addEventListener('loadeddata', () => {
@@ -580,9 +633,11 @@
                     });
                 } catch (e) {
                     console.error('getUserMedia failed', e);
+                    alert('无法访问摄像头：请确认使用的是 HTTPS，并在浏览器中允许访问摄像头。');
                 }
             } else {
                 console.warn('getUserMedia not supported');
+                alert('当前浏览器不支持摄像头访问（getUserMedia）。');
             }
         }
 
