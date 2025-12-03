@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Christmas Tree</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000000; font-family: 'Times New Roman', serif; }
@@ -97,50 +97,38 @@
             border: 1px solid rgba(255,255,255,0.25);
             border-radius: 8px;
             overflow: hidden;
-            opacity: 1;
-            pointer-events: auto;
+            opacity: 1; /* 默认就显示小框，方便确认 */
+            pointer-events: none;
             box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
             background: radial-gradient(circle at top, rgba(255,255,255,0.08), rgba(0,0,0,0.9));
             backdrop-filter: blur(4px);
-            z-index: 20;
+            z-index: 20; /* 抢在 Three.js canvas 和 UI 上面 */
         }
 
-        #webcam {
+        #webcam-preview {
             width: 100%;
             height: 100%;
             display: block;
             object-fit: cover;
-            transform: scaleX(-1);
-        }
-
-        #webcam-hint {
-            position: absolute;
-            left: 0; top: 0;
-            width: 100%; height: 100%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 9px;
-            text-align: center;
-            padding: 4px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            color: rgba(255,255,255,0.85);
-            background: rgba(0,0,0,0.6);
-            box-sizing: border-box;
-            pointer-events: none;
-            transition: opacity 0.4s ease;
-        }
-        #webcam-hint.hidden {
-            opacity: 0;
         }
     </style>
-
+    
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&display=swap');
     </style>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+                "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm"
+            }
+        }
+    </script>
 </head>
 <body>
+
     <div id="loader">
         <div class="spinner"></div>
         <div class="loader-text">Loading Holiday Magic</div>
@@ -161,19 +149,17 @@
     </div>
 
     <div id="webcam-wrapper">
-        <video id="webcam" autoplay playsinline muted></video>
-        <div id="webcam-hint">Tap to enable camera</div>
+        <video id="webcam" autoplay playsinline style="display:none;"></video>
+        <canvas id="webcam-preview"></canvas>
     </div>
 
     <script type="module">
-        /* 直接用 URL 导入，避免 importmap 在 iOS 上翻车 */
-        import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
-        import { EffectComposer } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/EffectComposer.js';
-        import { RenderPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/RenderPass.js';
-        import { UnrealBloomPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js';
-        import { RoomEnvironment } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/environments/RoomEnvironment.js';
-
-        let HandLandmarker, FilesetResolver; // Mediapipe 之后动态 import
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'; 
+        import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 
         const CONFIG = {
             colors: {
@@ -192,7 +178,7 @@
         };
 
         const STATE = {
-            mode: 'TREE',
+            mode: 'TREE',   // TREE / SCATTER / FOCUS
             focusIndex: -1,
             focusTarget: null,
             hand: { detected: false, x: 0, y: 0 },
@@ -204,17 +190,20 @@
         let clock = new THREE.Clock();
         let particleSystem = [];
         let photoMeshGroup = new THREE.Group();
-        let handLandmarker, video;
+        let handLandmarker, video, webcamCanvas, webcamCtx;
         let caneTexture;
 
+        // 手势平滑
         let smoothedPinch = 0.07;
         let smoothedSpread = 0.32;
 
+        // 模式切换防抖
         let gestureFocusFrames = 0;
         let gestureScatterFrames = 0;
         let gestureTreeFrames = 0;
         const GESTURE_HOLD_FRAMES = 6;
 
+        // FOCUS 模式相关
         const INACTIVITY_EXIT_SECONDS = 10;
         const INACTIVITY_EXIT_MS = INACTIVITY_EXIT_SECONDS * 1000;
         const HAND_MOVE_THRESHOLD = 0.04;
@@ -222,8 +211,9 @@
         let lastHandX = 0;
         let lastHandY = 0;
         let lastHandMoveTime = 0;
+
+        // FOCUS 中“捏一下”点击状态
         let pinchIsDown = false;
-        let webcamLoopStarted = false;
 
         async function init() {
             initThree();
@@ -235,10 +225,7 @@
             createDefaultPhotos();
             setupPostProcessing();
             setupEvents();
-
-            video = document.getElementById('webcam');
-
-            // 不自动申请摄像头，避免 iOS 静默拒绝，点击右下角再申请
+            await initMediaPipe();
 
             const loader = document.getElementById('loader');
             loader.style.opacity = 0;
@@ -560,81 +547,69 @@
             });
         }
 
-        function setWebcamHint(text) {
-            const hint = document.getElementById('webcam-hint');
-            if (!hint) return;
-            hint.textContent = text;
-            hint.classList.remove('hidden');
-        }
-
-        function hideWebcamHint() {
-            const hint = document.getElementById('webcam-hint');
-            if (!hint) return;
-            hint.classList.add('hidden');
-        }
-
-        async function startCameraAndGestures(fromUserGesture) {
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                setWebcamHint('Camera not supported');
-                return;
-            }
+        async function initMediaPipe() {
+            video = document.getElementById('webcam');
+            webcamCanvas = document.getElementById('webcam-preview');
+            webcamCtx = webcamCanvas.getContext('2d');
+            webcamCanvas.width = 160;
+            webcamCanvas.height = 120;
 
             try {
-                setWebcamHint(fromUserGesture ? 'Requesting camera...' : 'Tap to enable camera');
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'user' },
-                    audio: false
+                const vision = await FilesetResolver.forVisionTasks(
+                    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm'
+                );
+                handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+                        delegate: 'GPU'
+                    },
+                    runningMode: 'VIDEO',
+                    numHands: 1
                 });
-                video.srcObject = stream;
-                video.muted = true;
-                await video.play();
-                hideWebcamHint();
-
-                try {
-                    if (!HandLandmarker || !FilesetResolver) {
-                        const visionModule = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm');
-                        FilesetResolver = visionModule.FilesetResolver;
-                        HandLandmarker = visionModule.HandLandmarker;
-
-                        const vision = await FilesetResolver.forVisionTasks(
-                            'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm'
-                        );
-                        handLandmarker = await HandLandmarker.createFromOptions(vision, {
-                            baseOptions: {
-                                modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
-                                delegate: 'GPU'
-                            },
-                            runningMode: 'VIDEO',
-                            numHands: 1
-                        });
-                    }
-                } catch (err) {
-                    console.warn('Gesture module failed, camera preview still works:', err);
-                }
-
-                if (!webcamLoopStarted) {
-                    webcamLoopStarted = true;
-                    predictWebcam();
-                }
-            } catch (err) {
-                console.error('getUserMedia error:', err);
-                if (fromUserGesture) {
-                    setWebcamHint('Camera blocked / denied');
-                } else {
-                    setWebcamHint('Tap to enable camera');
-                }
+            } catch (e) {
+                console.error('Failed to init MediaPipe', e);
             }
+            
+            if (navigator.mediaDevices?.getUserMedia) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    video.srcObject = stream;
+
+                    video.addEventListener('loadeddata', () => {
+                        predictWebcam();
+                    });
+                } catch (e) {
+                    console.error('getUserMedia failed', e);
+                }
+            } else {
+                console.warn('getUserMedia not supported');
+            }
+        }
+
+        function drawWebcamPreview() {
+            if (!video || !webcamCtx || video.readyState < 2) return;
+
+            const w = webcamCanvas.width;
+            const h = webcamCanvas.height;
+
+            webcamCtx.save();
+            webcamCtx.clearRect(0, 0, w, h);
+            webcamCtx.translate(w, 0);
+            webcamCtx.scale(-1, 1);  // 镜像，像自拍
+            webcamCtx.drawImage(video, 0, 0, w, h);
+            webcamCtx.restore();
         }
 
         let lastVideoTime = -1;
         async function predictWebcam() {
             const nowTime = performance.now();
-            if (video && video.currentTime !== lastVideoTime) {
+            if (video.currentTime !== lastVideoTime) {
                 lastVideoTime = video.currentTime;
                 if (handLandmarker) {
                     const result = handLandmarker.detectForVideo(video, nowTime);
                     processGestures(result, nowTime);
                 }
+                drawWebcamPreview();
             }
             requestAnimationFrame(predictWebcam);
         }
@@ -705,9 +680,9 @@
             smoothedPinch = THREE.MathUtils.lerp(smoothedPinch, rawPinch, 0.5);
             smoothedSpread = THREE.MathUtils.lerp(smoothedSpread, rawSpread, 0.5);
 
-            const PINCH_FOCUS   = 0.055;
-            const SPREAD_OPEN   = 0.42;
-            const SPREAD_CLOSED = 0.30;
+            const PINCH_FOCUS   = 0.055; // 进入 FOCUS
+            const SPREAD_OPEN   = 0.42;  // 张开 → SCATTER
+            const SPREAD_CLOSED = 0.30;  // 握拳 → TREE
 
             let gestureType = null;
             if (smoothedPinch < PINCH_FOCUS) {
@@ -720,11 +695,13 @@
                 gestureType = null;
             }
 
+            // 模式切换
             if (gestureType === 'FOCUS') {
                 gestureFocusFrames++;
                 gestureScatterFrames = 0;
                 gestureTreeFrames = 0;
 
+                // 只能从 SCATTER 进入 FOCUS
                 if (gestureFocusFrames >= GESTURE_HOLD_FRAMES && STATE.mode === 'SCATTER') {
                     STATE.mode = 'FOCUS';
                     const photos = particleSystem.filter(p => p.type === 'PHOTO');
@@ -734,6 +711,7 @@
                         }
                         STATE.focusTarget = photos[STATE.focusIndex].mesh;
                         lastHandMoveTime = nowTime;
+                        // 进入时手是捏着的，避免一进来就触发一次点击
                         const PINCH_CLICK_DOWN = 0.06;
                         pinchIsDown = rawPinch < PINCH_CLICK_DOWN;
                     }
@@ -765,6 +743,7 @@
                 gestureFocusFrames = gestureScatterFrames = gestureTreeFrames = 0;
             }
 
+            // FOCUS 模式：捏一下切图 + 静止退出
             if (STATE.mode === 'FOCUS') {
                 const photos = particleSystem.filter(p => p.type === 'PHOTO');
                 if (photos.length > 0) {
@@ -777,6 +756,7 @@
                     const PINCH_CLICK_DOWN = 0.06;
                     const PINCH_CLICK_UP   = 0.09;
 
+                    // 按下：从松开 → 压过 DOWN 阈值
                     if (!pinchIsDown && rawPinch < PINCH_CLICK_DOWN) {
                         pinchIsDown = true;
                         if (photos.length > 1) {
@@ -784,7 +764,9 @@
                             STATE.focusTarget = photos[STATE.focusIndex].mesh;
                         }
                         lastHandMoveTime = nowTime;
-                    } else if (pinchIsDown && rawPinch > PINCH_CLICK_UP) {
+                    }
+                    // 松开：从按下 → 超过 UP 阈值
+                    else if (pinchIsDown && rawPinch > PINCH_CLICK_UP) {
                         pinchIsDown = false;
                     }
                 }
@@ -807,11 +789,6 @@
             });
 
             document.getElementById('file-input').addEventListener('change', handleImageUpload);
-
-            const webcamWrapper = document.getElementById('webcam-wrapper');
-            webcamWrapper.addEventListener('click', () => {
-                startCameraAndGestures(true);
-            });
             
             window.addEventListener('keydown', (e) => {
                 if (e.key.toLowerCase() === 'h') {
@@ -819,6 +796,7 @@
                     if (controls) controls.classList.toggle('ui-hidden');
                 }
 
+                // 备用调试：FOCUS 模式下，左右方向键也可以切换照片
                 if (STATE.mode === 'FOCUS') {
                     const photos = particleSystem.filter(p => p.type === 'PHOTO');
                     if (!photos.length) return;
