@@ -4,6 +4,12 @@ An interactive holiday web scene built with Three.js and MediaPipe hand tracking
 
 The app turns a floating particle system into a glowing Christmas tree, lets you upload photos as ornaments, and supports webcam-based gesture control for switching between viewing modes.
 
+## Live Demo
+
+[https://tpppt.github.io/merry-christmas-tree/](https://tpppt.github.io/merry-christmas-tree/)
+
+![Christmas Tree Preview](Christmas%20Tree.gif)
+
 ## Features
 
 - Procedural 3D Christmas tree made from ornaments, dust particles, and lighting effects
@@ -52,6 +58,7 @@ Then open `http://localhost:8000` in a modern browser such as Chrome or Edge and
 
 ```text
 .
+|- Christmas Tree.gif
 |- index.html
 `- README.md
 ```
