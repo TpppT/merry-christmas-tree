@@ -87,12 +87,29 @@
 
         #file-input { display: none; }
 
+        /* 摄像头小窗口样式（右下角） */
         #webcam-wrapper {
-            position: absolute; bottom: 40px; right: 40px;
-            width: 120px; height: 90px;
-            border: 1px solid rgba(255,255,255,0.1);
-            overflow: hidden; opacity: 0;
+            position: absolute;
+            bottom: 40px;
+            right: 40px;
+            width: 140px;
+            height: 105px;
+            border: 1px solid rgba(255,255,255,0.25);
+            border-radius: 8px;
+            overflow: hidden;
+            opacity: 1; /* 默认就显示小框，方便确认 */
             pointer-events: none;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+            background: radial-gradient(circle at top, rgba(255,255,255,0.08), rgba(0,0,0,0.9));
+            backdrop-filter: blur(4px);
+            z-index: 20; /* 抢在 Three.js canvas 和 UI 上面 */
+        }
+
+        #webcam-preview {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: cover;
         }
     </style>
     
@@ -176,9 +193,9 @@
         let handLandmarker, video, webcamCanvas, webcamCtx;
         let caneTexture;
 
-        // 手势平滑（针对归一化后的值的初始中性状态）
-        let smoothedPinch = 0.25;   // 归一化后，捏手时会变得更小
-        let smoothedSpread = 0.65;  // 归一化后，张开时会更大
+        // 手势平滑
+        let smoothedPinch = 0.07;
+        let smoothedSpread = 0.32;
 
         // 模式切换防抖
         let gestureFocusFrames = 0;
@@ -186,14 +203,9 @@
         let gestureTreeFrames = 0;
         const GESTURE_HOLD_FRAMES = 6;
 
-        // FOCUS 模式相关：FOCUS 静止一段时间回 SCATTER
+        // FOCUS 模式相关
         const INACTIVITY_EXIT_SECONDS = 10;
         const INACTIVITY_EXIT_MS = INACTIVITY_EXIT_SECONDS * 1000;
-
-        // SCATTER 模式：长时间无动作/无手 → 回 TREE
-        const SCATTER_INACTIVITY_EXIT_SECONDS = 8;
-        const SCATTER_INACTIVITY_EXIT_MS = SCATTER_INACTIVITY_EXIT_SECONDS * 1000;
-
         const HAND_MOVE_THRESHOLD = 0.04;
 
         let lastHandX = 0;
@@ -539,25 +551,53 @@
             video = document.getElementById('webcam');
             webcamCanvas = document.getElementById('webcam-preview');
             webcamCtx = webcamCanvas.getContext('2d');
-            webcamCanvas.width = 160; webcamCanvas.height = 120;
+            webcamCanvas.width = 160;
+            webcamCanvas.height = 120;
 
-            const vision = await FilesetResolver.forVisionTasks(
-                'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm'
-            );
-            handLandmarker = await HandLandmarker.createFromOptions(vision, {
-                baseOptions: {
-                    modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
-                    delegate: 'GPU'
-                },
-                runningMode: 'VIDEO',
-                numHands: 1
-            });
+            try {
+                const vision = await FilesetResolver.forVisionTasks(
+                    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm'
+                );
+                handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+                        delegate: 'GPU'
+                    },
+                    runningMode: 'VIDEO',
+                    numHands: 1
+                });
+            } catch (e) {
+                console.error('Failed to init MediaPipe', e);
+            }
             
             if (navigator.mediaDevices?.getUserMedia) {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                video.srcObject = stream;
-                video.addEventListener('loadeddata', predictWebcam);
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    video.srcObject = stream;
+
+                    video.addEventListener('loadeddata', () => {
+                        predictWebcam();
+                    });
+                } catch (e) {
+                    console.error('getUserMedia failed', e);
+                }
+            } else {
+                console.warn('getUserMedia not supported');
             }
+        }
+
+        function drawWebcamPreview() {
+            if (!video || !webcamCtx || video.readyState < 2) return;
+
+            const w = webcamCanvas.width;
+            const h = webcamCanvas.height;
+
+            webcamCtx.save();
+            webcamCtx.clearRect(0, 0, w, h);
+            webcamCtx.translate(w, 0);
+            webcamCtx.scale(-1, 1);  // 镜像，像自拍
+            webcamCtx.drawImage(video, 0, 0, w, h);
+            webcamCtx.restore();
         }
 
         let lastVideoTime = -1;
@@ -569,15 +609,23 @@
                     const result = handLandmarker.detectForVideo(video, nowTime);
                     processGestures(result, nowTime);
                 }
+                drawWebcamPreview();
             }
             requestAnimationFrame(predictWebcam);
         }
 
-        // ------------- 手势处理（归一化 + 边缘/太小过滤 + 保留“握拳 = TREE”） -------------
         function processGestures(result, nowTime) {
+            if (!result || !result.landmarks) {
+                STATE.hand.detected = false;
+                smoothedPinch = THREE.MathUtils.lerp(smoothedPinch, 0.07, 0.1);
+                smoothedSpread = THREE.MathUtils.lerp(smoothedSpread, 0.32, 0.1);
+                gestureFocusFrames = gestureScatterFrames = gestureTreeFrames = 0;
+                pinchIsDown = false;
+                return;
+            }
+
             const hasLandmarks = result.landmarks && result.landmarks.length > 0;
 
-            // 置信度
             let score = 0;
             if (result.handednesses &&
                 result.handednesses.length > 0 &&
@@ -590,52 +638,32 @@
 
             if (!hasHand) {
                 STATE.hand.detected = false;
-                // 回到中性值，避免下一次刚出现就立刻触发某个模式
-                smoothedPinch  = THREE.MathUtils.lerp(smoothedPinch,  0.25, 0.15);
-                smoothedSpread = THREE.MathUtils.lerp(smoothedSpread, 0.65, 0.15);
+                smoothedPinch = THREE.MathUtils.lerp(smoothedPinch, 0.07, 0.1);
+                smoothedSpread = THREE.MathUtils.lerp(smoothedSpread, 0.32, 0.1);
                 gestureFocusFrames = gestureScatterFrames = gestureTreeFrames = 0;
                 pinchIsDown = false;
                 return;
             }
 
+            STATE.hand.detected = true;
             const lm = result.landmarks[0];
 
-            // 1. 计算手的包围盒（用于远近归一化 & 边缘过滤）
-            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-            for (const p of lm) {
-                if (p.x < minX) minX = p.x;
-                if (p.x > maxX) maxX = p.x;
-                if (p.y < minY) minY = p.y;
-                if (p.y > maxY) maxY = p.y;
-            }
-            const width  = maxX - minX;
-            const height = maxY - minY;
-            const area   = width * height;
-            const centerX = (minX + maxX) * 0.5;
-            const centerY = (minY + maxY) * 0.5;
-
-            // 手太小 = 离镜头太远；EDGE_MARGIN = 手靠近屏幕边缘
-            const MIN_HAND_AREA = 0.012;  // 越大越“嫌远”
-            const EDGE_MARGIN   = 0.08;   // 离 0/1 边缘 8% 内不做模式判定
-
-            // 2. 更新“手的位置”，SCATTER 模式下用来旋转
-            STATE.hand.detected = true;
             STATE.hand.x = (lm[9].x - 0.5) * 2;
             STATE.hand.y = (lm[9].y - 0.5) * 2;
 
             if (lastHandMoveTime === 0) {
                 lastHandMoveTime = nowTime;
             }
+
             const dx = STATE.hand.x - lastHandX;
             const dy = STATE.hand.y - lastHandY;
-            const moveDist = Math.hypot(dx, dy);
-            if (moveDist > HAND_MOVE_THRESHOLD) {
+            const dist = Math.hypot(dx, dy);
+            if (dist > HAND_MOVE_THRESHOLD) {
                 lastHandMoveTime = nowTime;
             }
             lastHandX = STATE.hand.x;
             lastHandY = STATE.hand.y;
 
-            // 3. 原始距离：Thumb-Index pinch，Wrist-Fingers spread
             const thumb = lm[4];
             const index = lm[8];
             const wrist = lm[0];
@@ -649,52 +677,25 @@
             }
             rawSpread /= tips.length;
 
-            // 4. 用手的大小归一化（解决远近问题）
-            let baseSize = Math.max(width, height);
-            if (baseSize < 1e-4) baseSize = 1e-4;
+            smoothedPinch = THREE.MathUtils.lerp(smoothedPinch, rawPinch, 0.5);
+            smoothedSpread = THREE.MathUtils.lerp(smoothedSpread, rawSpread, 0.5);
 
-            const normPinch  = rawPinch  / baseSize;  // 越小越“捏”
-            const normSpread = rawSpread / baseSize;  // 越大越“张开”
-
-            // 平滑
-            smoothedPinch  = THREE.MathUtils.lerp(smoothedPinch,  normPinch,  0.4);
-            smoothedSpread = THREE.MathUtils.lerp(smoothedSpread, normSpread, 0.4);
-
-            // 5. 太小 / 靠边：只认为“有手”，但不切模式
-            if (area < MIN_HAND_AREA ||
-                centerX < EDGE_MARGIN || centerX > 1 - EDGE_MARGIN ||
-                centerY < EDGE_MARGIN || centerY > 1 - EDGE_MARGIN) {
-
-                gestureFocusFrames = gestureScatterFrames = gestureTreeFrames = 0;
-                return;
-            }
-
-            // 6. 根据归一化 + 平滑后的值判定手势类型
-            // 这里保留三种：
-            //  - FOCUS：捏手（拇指和食指靠近，手整体还是比较张开）
-            //  - SCATTER：大张开
-            //  - TREE：握拳/合上手（手指整体收得比较拢）
-            const PINCH_FOCUS        = 0.25; // 越小越“捏”
-            const SPREAD_FOR_FOCUS   = 0.60; // FOCUS 需要 spread 至少这么大，避免拳头被当成捏
-            const SPREAD_OPEN        = 0.80; // 很张开 → SCATTER
-            const SPREAD_CLOSED      = 0.80; // 比较收拢 → TREE
+            const PINCH_FOCUS   = 0.055; // 进入 FOCUS
+            const SPREAD_OPEN   = 0.42;  // 张开 → SCATTER
+            const SPREAD_CLOSED = 0.30;  // 握拳 → TREE
 
             let gestureType = null;
-            if (smoothedPinch < PINCH_FOCUS && smoothedSpread > SPREAD_FOR_FOCUS) {
-                // 拇指和食指很近 + 手整体仍然张开 = 捏 → FOCUS
+            if (smoothedPinch < PINCH_FOCUS) {
                 gestureType = 'FOCUS';
             } else if (smoothedSpread > SPREAD_OPEN) {
-                // 手指张得很开 = SCATTER
                 gestureType = 'SCATTER';
             } else if (smoothedSpread < SPREAD_CLOSED) {
-                // 手指整体收拢 = TREE（握拳 / 合上手）
                 gestureType = 'TREE';
             } else {
-                // 中间状态（半张开手等） = 不切模式
                 gestureType = null;
             }
 
-            // 7. 模式切换逻辑（带帧数防抖）
+            // 模式切换
             if (gestureType === 'FOCUS') {
                 gestureFocusFrames++;
                 gestureScatterFrames = 0;
@@ -709,9 +710,11 @@
                             STATE.focusIndex = Math.floor(Math.random() * photos.length);
                         }
                         STATE.focusTarget = photos[STATE.focusIndex].mesh;
+                        lastHandMoveTime = nowTime;
+                        // 进入时手是捏着的，避免一进来就触发一次点击
+                        const PINCH_CLICK_DOWN = 0.06;
+                        pinchIsDown = rawPinch < PINCH_CLICK_DOWN;
                     }
-                    lastHandMoveTime = nowTime;
-                    pinchIsDown = (smoothedPinch < PINCH_FOCUS); // 进入时如果已经捏着，防止立刻触发点击
                 }
             } else if (gestureType === 'SCATTER') {
                 gestureScatterFrames++;
@@ -728,7 +731,6 @@
                 gestureFocusFrames = 0;
                 gestureScatterFrames = 0;
 
-                // 不从 FOCUS 直接回 TREE，避免误触：先退出 FOCUS → SCATTER，再握拳
                 if (gestureTreeFrames >= GESTURE_HOLD_FRAMES &&
                     STATE.mode !== 'TREE' &&
                     STATE.mode !== 'FOCUS') {
@@ -738,11 +740,10 @@
                     pinchIsDown = false;
                 }
             } else {
-                // 中性状态：不强制切模式，只清计数
                 gestureFocusFrames = gestureScatterFrames = gestureTreeFrames = 0;
             }
 
-            // 8. FOCUS 模式：捏一下切图 + 静止退出（回 SCATTER）
+            // FOCUS 模式：捏一下切图 + 静止退出
             if (STATE.mode === 'FOCUS') {
                 const photos = particleSystem.filter(p => p.type === 'PHOTO');
                 if (photos.length > 0) {
@@ -752,13 +753,11 @@
                         STATE.focusTarget = photos[STATE.focusIndex].mesh;
                     }
 
-                    // 用归一化后的 pinch 作为“点击”判断
-                    const PINCH_CLICK_DOWN = 0.28;
-                    const PINCH_CLICK_UP   = 0.36;
-                    const pinchForClick    = smoothedPinch;
+                    const PINCH_CLICK_DOWN = 0.06;
+                    const PINCH_CLICK_UP   = 0.09;
 
                     // 按下：从松开 → 压过 DOWN 阈值
-                    if (!pinchIsDown && pinchForClick < PINCH_CLICK_DOWN) {
+                    if (!pinchIsDown && rawPinch < PINCH_CLICK_DOWN) {
                         pinchIsDown = true;
                         if (photos.length > 1) {
                             STATE.focusIndex = (STATE.focusIndex + 1) % photos.length;
@@ -767,12 +766,11 @@
                         lastHandMoveTime = nowTime;
                     }
                     // 松开：从按下 → 超过 UP 阈值
-                    else if (pinchIsDown && pinchForClick > PINCH_CLICK_UP) {
+                    else if (pinchIsDown && rawPinch > PINCH_CLICK_UP) {
                         pinchIsDown = false;
                     }
                 }
 
-                // 静止超时自动退回 SCATTER
                 if (nowTime - lastHandMoveTime > INACTIVITY_EXIT_MS) {
                     STATE.mode = 'SCATTER';
                     STATE.focusTarget = null;
@@ -842,16 +840,6 @@
 
             mainGroup.rotation.y = STATE.rotation.y;
             mainGroup.rotation.x = STATE.rotation.x;
-
-            // SCATTER 模式长时间无动作 / 没手 → 自动回 TREE
-            const now = performance.now();
-            if (STATE.mode === 'SCATTER' &&
-                lastHandMoveTime !== 0 &&
-                now - lastHandMoveTime > SCATTER_INACTIVITY_EXIT_MS) {
-                STATE.mode = 'TREE';
-                STATE.focusTarget = null;
-                STATE.hand.detected = false;
-            }
 
             particleSystem.forEach(p => p.update(dt, STATE.mode, STATE.focusTarget));
             composer.render();
