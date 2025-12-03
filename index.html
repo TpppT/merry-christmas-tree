@@ -97,43 +97,20 @@
             border: 1px solid rgba(255,255,255,0.25);
             border-radius: 8px;
             overflow: hidden;
-            opacity: 1; /* 默认就显示小框，方便确认 */
+            opacity: 1; /* 默认可见 */
             pointer-events: none;
             box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
             background: radial-gradient(circle at top, rgba(255,255,255,0.08), rgba(0,0,0,0.9));
             backdrop-filter: blur(4px);
-            z-index: 20; /* 抢在 Three.js canvas 和 UI 上面 */
+            z-index: 20; /* 压过 Three.js canvas 和 UI */
         }
 
-        #webcam-preview {
+        #webcam {
             width: 100%;
             height: 100%;
             display: block;
             object-fit: cover;
-        }
-
-        /* 移动端适配 */
-        @media (max-width: 768px) {
-            h1 {
-                font-size: 32px;
-                letter-spacing: 3px;
-            }
-
-            .upload-wrapper {
-                margin-top: 12px;
-            }
-
-            #webcam-wrapper {
-                width: 110px;
-                height: 82px;
-                bottom: 16px;
-                right: 16px;
-            }
-
-            .loader-text {
-                font-size: 12px;
-                letter-spacing: 3px;
-            }
+            transform: scaleX(-1); /* 像自拍一样镜像 */
         }
     </style>
     
@@ -141,9 +118,7 @@
         @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&display=swap');
     </style>
 
-    <!-- 让 importmap 在手机上也可用的 polyfill -->
-    <script async src="https://ga.jspm.io/npm:es-module-shims@1.8.2/dist/es-module-shims.js"></script>
-
+    <!-- importmap 里仍然声明 mediapipe，供动态 import 用 -->
     <script type="importmap">
         {
             "imports": {
@@ -175,9 +150,9 @@
         </div>
     </div>
 
+    <!-- 摄像头预览小窗口 -->
     <div id="webcam-wrapper">
-        <video id="webcam" autoplay playsinline muted style="display:none;"></video>
-        <canvas id="webcam-preview"></canvas>
+        <video id="webcam" autoplay playsinline muted></video>
     </div>
 
     <script type="module">
@@ -186,17 +161,16 @@
         import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
         import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'; 
-        import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 
-        // 简单判断是否为移动端
-        const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+        // Mediapipe 通过动态 import 加载，避免加载失败时整个脚本崩掉
+        let HandLandmarker, FilesetResolver;
 
         const CONFIG = {
             colors: {
                 bg: 0x000000, 
                 champagneGold: 0xffd966, 
                 deepGreen: 0x03180a,     
-                accentRed: 0x990000     
+                accentRed: 0x990000,     
             },
             particles: {
                 count: 1500,
@@ -206,13 +180,6 @@
             },
             camera: { z: 50 }
         };
-
-        // 移动端降低粒子数量、稍微拉远相机
-        if (isMobile) {
-            CONFIG.particles.count = 800;
-            CONFIG.particles.dustCount = 1200;
-            CONFIG.camera.z = 55;
-        }
 
         const STATE = {
             mode: 'TREE',   // TREE / SCATTER / FOCUS
@@ -227,7 +194,7 @@
         let clock = new THREE.Clock();
         let particleSystem = [];
         let photoMeshGroup = new THREE.Group();
-        let handLandmarker, video, webcamCanvas, webcamCtx;
+        let handLandmarker, video;
         let caneTexture;
 
         // 手势平滑
@@ -262,7 +229,7 @@
             createDefaultPhotos();
             setupPostProcessing();
             setupEvents();
-            await initMediaPipe();
+            await initMediaPipe();  // 摄像头 + 手势
 
             const loader = document.getElementById('loader');
             loader.style.opacity = 0;
@@ -282,10 +249,7 @@
 
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
             renderer.setSize(window.innerWidth, window.innerHeight);
-
-            const maxPixelRatio = isMobile ? 1.5 : 2;
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPixelRatio));
-
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
             renderer.toneMapping = THREE.ReinhardToneMapping;
             renderer.toneMappingExposure = 2.2;
             container.appendChild(renderer.domElement);
@@ -457,8 +421,7 @@
 
             const goldMat = new THREE.MeshStandardMaterial({
                 color: CONFIG.colors.champagneGold,
-                metalness: 1.0,
-                roughness: 0.1,
+                metalness: 1.0, roughness: 0.1,
                 envMapIntensity: 2.0,
                 emissive: 0x443300,
                 emissiveIntensity: 0.3
@@ -466,17 +429,14 @@
 
             const greenMat = new THREE.MeshStandardMaterial({
                 color: CONFIG.colors.deepGreen,
-                metalness: 0.2,
-                roughness: 0.8,
+                metalness: 0.2, roughness: 0.8,
                 emissive: 0x002200,
                 emissiveIntensity: 0.2
             });
 
             const redMat = new THREE.MeshPhysicalMaterial({
                 color: CONFIG.colors.accentRed,
-                metalness: 0.3,
-                roughness: 0.2,
-                clearcoat: 1.0,
+                metalness: 0.3, roughness: 0.2, clearcoat: 1.0,
                 emissive: 0x330000
             });
             
@@ -513,11 +473,8 @@
 
             const starGeo = new THREE.OctahedronGeometry(1.2, 0);
             const starMat = new THREE.MeshStandardMaterial({
-                color: 0xffdd88,
-                emissive: 0xffaa00,
-                emissiveIntensity: 1.0,
-                metalness: 1.0,
-                roughness: 0
+                color: 0xffdd88, emissive: 0xffaa00, emissiveIntensity: 1.0,
+                metalness: 1.0, roughness: 0
             });
             const star = new THREE.Mesh(starGeo, starMat);
             star.position.set(0, CONFIG.particles.treeHeight/2 + 1.2, 0);
@@ -596,12 +553,31 @@
 
         async function initMediaPipe() {
             video = document.getElementById('webcam');
-            webcamCanvas = document.getElementById('webcam-preview');
-            webcamCtx = webcamCanvas.getContext('2d');
-            webcamCanvas.width = 160;
-            webcamCanvas.height = 120;
 
+            // 1. 先拿到摄像头流，保证小窗口一定能显示
+            if (navigator.mediaDevices?.getUserMedia) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: 'user' },
+                        audio: false
+                    });
+                    video.srcObject = stream;
+                    video.muted = true;
+                    // 确保在某些浏览器里真的开始播放
+                    await video.play();
+                } catch (err) {
+                    console.error('getUserMedia 失败:', err);
+                }
+            } else {
+                console.warn('此浏览器不支持 getUserMedia');
+            }
+
+            // 2. 动态加载 Mediapipe 手势（失败了也没关系，只是没有手势控制）
             try {
+                const visionModule = await import('@mediapipe/tasks-vision');
+                FilesetResolver = visionModule.FilesetResolver;
+                HandLandmarker = visionModule.HandLandmarker;
+
                 const vision = await FilesetResolver.forVisionTasks(
                     'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm'
                 );
@@ -613,58 +589,27 @@
                     runningMode: 'VIDEO',
                     numHands: 1
                 });
-            } catch (e) {
-                console.error('Failed to init MediaPipe', e);
+            } catch (err) {
+                console.warn('手势识别模块加载失败，将只显示摄像头预览:', err);
             }
-            
-            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia({
-                        video: {
-                            facingMode: 'user',           // 手机优先使用前置摄像头
-                            width:  { ideal: 640 },
-                            height: { ideal: 480 }
-                        }
-                    });
-                    video.srcObject = stream;
 
-                    video.addEventListener('loadeddata', () => {
-                        predictWebcam();
-                    });
-                } catch (e) {
-                    console.error('getUserMedia failed', e);
-                    alert('无法访问摄像头：请确认使用的是 HTTPS，并在浏览器中允许访问摄像头。');
-                }
+            // 3. 启动手势检测循环（即使 handLandmarker 为空也没关系）
+            if (video.readyState >= 2) {
+                predictWebcam();
             } else {
-                console.warn('getUserMedia not supported');
-                alert('当前浏览器不支持摄像头访问（getUserMedia）。');
+                video.addEventListener('loadeddata', () => predictWebcam(), { once: true });
             }
-        }
-
-        function drawWebcamPreview() {
-            if (!video || !webcamCtx || video.readyState < 2) return;
-
-            const w = webcamCanvas.width;
-            const h = webcamCanvas.height;
-
-            webcamCtx.save();
-            webcamCtx.clearRect(0, 0, w, h);
-            webcamCtx.translate(w, 0);
-            webcamCtx.scale(-1, 1);  // 镜像，像自拍
-            webcamCtx.drawImage(video, 0, 0, w, h);
-            webcamCtx.restore();
         }
 
         let lastVideoTime = -1;
         async function predictWebcam() {
             const nowTime = performance.now();
-            if (video.currentTime !== lastVideoTime) {
+            if (video && video.currentTime !== lastVideoTime) {
                 lastVideoTime = video.currentTime;
                 if (handLandmarker) {
                     const result = handLandmarker.detectForVideo(video, nowTime);
                     processGestures(result, nowTime);
                 }
-                drawWebcamPreview();
             }
             requestAnimationFrame(predictWebcam);
         }
